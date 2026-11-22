@@ -1,0 +1,261 @@
+
+name: Build QZ Custom APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qz-custom-apk
+  cancel-in-progress: false
+
+jobs:
+  build-android:
+    if: github.ref == 'refs/heads/qz-custom-apk'
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: 'false'
+
+      - name: Checkout submodules
+        run: |
+          git submodule init
+          git submodule update --init --recursive
+
+      - name: Install Linux packages
+        run: |
+          sudo apt update -y
+          sudo apt-get install -y \
+            qtbase5-dev qtchooser qt5-qmake qtbase5-dev-tools \
+            qttools5-dev-tools qtquickcontrols2-5-dev \
+            libqt5bluetooth5 libqt5widgets5 libqt5positioning5 \
+            libqt5xml5 qtconnectivity5-dev qtpositioning5-dev \
+            libqt5charts5-dev libqt5charts5 libqt5networkauth5-dev \
+            libqt5websockets5 libxcb-randr0-dev libxcb-xtest0-dev \
+            libxcb-xinerama0-dev libxcb-shape0-dev \
+            libxcb-xkb-dev
+
+      - name: Install Qt Android
+        uses: jdpurcell/install-qt-action@v5
+        with:
+          version: '5.15.0'
+          host: linux
+          target: android
+          arch: android
+          modules: 'qtcharts qtnetworkauth qtpurchasing'
+          dir: '${{ github.workspace }}/output/android/'
+          cache: 'false'
+
+      - name: Install custom 16K-page-size Qt
+        run: |
+          QT_DIR="${{ github.workspace }}/output/android/Qt/5.15.0/android"
+
+          curl -fsSL -o /tmp/qt-page16.zip \
+            https://github.com/cagnulein/qt-5.15.0-android-page16k/releases/download/1.0.1/qt5.15.0-android-page16-1.0.1.zip
+
+          unzip -q /tmp/qt-page16.zip -d /tmp/qt-page16k
+
+          rsync -a --exclude='bin/' \
+            /tmp/qt-page16k/qt5.15.0-android-page16/usr/local/Qt-5.15.0/ \
+            "$QT_DIR/"
+
+          sed -i 's/darwin-x86_64/linux-x86_64/' \
+            "$QT_DIR/mkspecs/qdevice.pri"
+
+          rm -rf /tmp/qt-page16.zip /tmp/qt-page16k
+
+      - name: Install Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Patch Qt Bluetooth
+        run: |
+          cp qt-patches/android/5.15.0/jar/*.* \
+            output/android/Qt/5.15.0/android/jar/
+
+      - name: Prepare qthttpserver
+        run: |
+          cp qHttpServerBin/5.15.2/headers/* \
+            src/qthttpserver/src/3rdparty/http-parser/
+
+      - name: Install Android SDK packages
+        run: |
+          SDKMANAGER="/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager"
+
+          echo "y" | "$SDKMANAGER" \
+            "ndk;21.1.6352462" \
+            "platforms;android-37.0" \
+            "build-tools;36.0.0" \
+            --channel=3
+
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+
+          if [ -d "$SDK_ROOT/platforms/android-37.0" ] && \
+             [ ! -e "$SDK_ROOT/platforms/android-37" ]; then
+            ln -s android-37.0 "$SDK_ROOT/platforms/android-37"
+          fi
+
+      - name: Setup ccache
+        run: |
+          sudo apt-get install -y ccache
+
+          echo "CCACHE_DIR=${{ github.workspace }}/.ccache" >> "$GITHUB_ENV"
+
+          ccache --set-config=max_size=2G
+          ccache --set-config=compression=true
+          ccache --set-config=compression_level=6
+          ccache --zero-stats
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: qz-custom-ccache-${{ hashFiles('src/**/*.cpp', 'src/**/*.h', 'src/*.pro') }}
+          restore-keys: |
+            qz-custom-ccache-
+
+      - name: Setup NDK environment
+        run: |
+          NDK_PATH=/usr/local/lib/android/sdk/ndk/21.1.6352462
+          NDK_BIN=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin
+
+          ln -sfn "$NDK_PATH" /usr/local/lib/android/sdk/ndk-bundle
+
+          echo "ANDROID_NDK=/usr/local/lib/android/sdk/ndk-bundle" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=/usr/local/lib/android/sdk/ndk-bundle" >> "$GITHUB_ENV"
+
+          if [ ! -f "$NDK_BIN/clang.real" ]; then
+            mv "$NDK_BIN/clang" "$NDK_BIN/clang.real"
+            mv "$NDK_BIN/clang++" "$NDK_BIN/clang++.real"
+          fi
+
+          printf '#!/bin/bash\nexec /usr/bin/ccache %s/clang.real "$@"\n' "$NDK_BIN" > "$NDK_BIN/clang"
+          printf '#!/bin/bash\nexec /usr/bin/ccache %s/clang++.real "$@"\n' "$NDK_BIN" > "$NDK_BIN/clang++"
+
+          chmod +x "$NDK_BIN/clang" "$NDK_BIN/clang++"
+
+      - name: Generate application secrets
+        env:
+          STRAVA_SECRET: ${{ secrets.strava_secret_key }}
+          PELOTON_SECRET: ${{ secrets.peloton_secret_key }}
+          SMTP_USER: ${{ secrets.smtp_username }}
+          SMTP_PASS: ${{ secrets.smtp_password }}
+          SMTP_SERVER: ${{ secrets.smtp_server }}
+          INTERVALS_ID: ${{ secrets.intervalsicu_client_id }}
+          INTERVALS_SECRET: ${{ secrets.intervalsicu_client_secret }}
+          CESIUM_KEY: ${{ secrets.cesiumkey }}
+        run: |
+          cd src
+
+          printf '#define STRAVA_SECRET_KEY %s\n' "$STRAVA_SECRET" > secret.h
+          printf '#define PELOTON_SECRET_KEY %s\n' "$PELOTON_SECRET" >> secret.h
+          printf '#define SMTP_USERNAME %s\n' "$SMTP_USER" >> secret.h
+          printf '#define SMTP_PASSWORD %s\n' "$SMTP_PASS" >> secret.h
+          printf '#define SMTP_SERVER %s\n' "$SMTP_SERVER" >> secret.h
+          printf '#define INTERVALSICU_CLIENT_ID %s\n' "$INTERVALS_ID" >> secret.h
+          printf '#define INTERVALSICU_CLIENT_SECRET %s\n' "$INTERVALS_SECRET" >> secret.h
+
+          printf '%s\n' "$CESIUM_KEY" >> inner_templates/googlemaps/cesium-key.js
+
+      - name: Build qthttpserver for Android
+        run: |
+          cd src/qthttpserver
+          qmake
+          make -j8
+          make install
+
+      - name: Build QZ for Android
+        run: |
+          lrelease src/qdomyos-zwift.pri
+
+          qmake -spec android-clang \
+            'ANDROID_ABIS=armeabi-v7a arm64-v8a x86 x86_64' \
+            'ANDROID_NDK_ROOT=/usr/local/lib/android/sdk/ndk/21.1.6352462' \
+            'CONFIG+=debug' \
+            && make -j4 \
+            && make INSTALL_ROOT="${{ github.workspace }}/output/android/" install
+
+          cat src/android-qdomyos-zwift-deployment-settings.json
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            .gradle-android/caches
+            .gradle-android/wrapper
+          key: qz-custom-gradle-${{ runner.os }}-v1
+          restore-keys: |
+            qz-custom-gradle-${{ runner.os }}-
+
+      - name: Build QZ Custom Debug APK
+        run: |
+          cd src
+
+          mkdir -p "${{ github.workspace }}/output/android"
+
+          rsync -a --exclude build --exclude .gradle \
+            android/ "${{ github.workspace }}/output/android/"
+
+          androiddeployqt \
+            --input android-qdomyos-zwift-deployment-settings.json \
+            --output "${{ github.workspace }}/output/android/" \
+            --android-platform android-37.0 \
+            --gradle --aux-mode
+
+          export GRADLE_USER_HOME="${{ github.workspace }}/.gradle-android"
+          export GRADLE_DIST_DIR="${{ github.workspace }}/gradle-9.3.1"
+          export QT_ANDROID_DIR="${{ github.workspace }}/output/android/Qt/5.15.0/android"
+
+          mkdir -p "$GRADLE_USER_HOME"
+
+          rm -f "$GRADLE_USER_HOME/gradle.properties"
+          rm -f "$HOME/.gradle/gradle.properties"
+
+          find "${{ github.workspace }}/output/android" \
+            \( -name '*.properties' -o -name '*.gradle' -o -name '*.gradle.kts' \) \
+            -exec sed -i '/android\.bundle\.enableUncompressedNativeLibs/d' {} +
+
+          printf '\nqt5AndroidDir=%s/src/android/java\n' "$QT_ANDROID_DIR" \
+            >> "${{ github.workspace }}/output/android/gradle.properties"
+
+          if [ ! -x "$GRADLE_DIST_DIR/bin/gradle" ]; then
+            curl -fsSL \
+              https://services.gradle.org/distributions/gradle-9.3.1-bin.zip \
+              -o /tmp/gradle.zip
+
+            unzip -q /tmp/gradle.zip -d "${{ github.workspace }}"
+          fi
+
+          "$GRADLE_DIST_DIR/bin/gradle" \
+            -g "$GRADLE_USER_HOME" \
+            --no-daemon \
+            -p "${{ github.workspace }}/output/android" \
+            assembleCustomDebug
+
+      - name: Verify APK exists
+        run: |
+          APK_DIR="${{ github.workspace }}/output/android/build/outputs/apk/custom/debug"
+
+          echo "Looking for APK in $APK_DIR"
+
+          find "$APK_DIR" -maxdepth 1 -name '*.apk' -print
+
+          if ! compgen -G "$APK_DIR/*.apk" > /dev/null; then
+            echo "Custom Debug APK was not generated."
+            exit 1
+          fi
+
+      - name: Upload QZ Custom APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: QZ-Personnalise-APK
+          path: ${{ github.workspace }}/output/android/build/outputs/apk/custom/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
