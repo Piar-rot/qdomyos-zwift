@@ -394,16 +394,14 @@ HomeForm {
         // last column ends with the gap: the grid is shifted by half the gap, so the outer margins
         // are equal. The modern look also adds the page side margin of its other screens (the
         // "Not connecting?" card, the header): the outer tile edges line up with the card
-        readonly property real tileGap: 5 * settings.ui_zoom / 100
+readonly property real tileGap: 2 * settings.ui_zoom / 100
         readonly property real tileSideMargin: window.ui.modern ? window.contentSideMargin : 0
         readonly property real tileRowWidth: parent.width - (window.ui.modern ? 2 * tileSideMargin - tileGap : 0)
-        // Columns counted on the whole page, as before the margins: on a 360 dp phone the margins
-        // would leave one column instead of two. The tiles get narrower there instead (165 dp)
         readonly property int tileColumns: Math.max(1, Math.floor(parent.width / tileBaseWidth))
         cellWidth: Math.floor(Math.min(tileRowWidth / tileColumns, tileBaseWidth * 1.25))
         width: tileColumns * cellWidth
         anchors.horizontalCenterOffset: tileGap / 2
-        cellHeight: 130 * settings.ui_zoom / 100
+        cellHeight: 142 * settings.ui_zoom / 100
         focus: true
         model: appModel
         // While the tiles are being moved the gap above the first row is part of the content,
@@ -541,7 +539,7 @@ HomeForm {
         delegate: Item {
             id: id1
             width: gridView.cellWidth - gridView.tileGap
-            height: 125 * settings.ui_zoom / 100
+            height: 138 * settings.ui_zoom / 100
 
             visible: visibleItem
             Component.onCompleted: console.log("completed " + objectName)
@@ -611,11 +609,11 @@ HomeForm {
                 UiFrame {
                     id: modernCard
                     width: modernTile.width - 2 * modernTile.zoom
-                    height: 123 * modernTile.zoom
-                    radius: 16 * modernTile.zoom
+                    height: 136 * modernTile.zoom
+                    radius: 6 * modernTile.zoom
                     fill: window.ui.surface
-                    stroke: window.ui.alpha(window.ui.textMain, 0.06)
-                    strokeWidth: 1
+                    stroke: window.ui.alpha(window.ui.textMain, 0.18)
+                    strokeWidth: 1.5
                     visible: !largeButton
                     Accessible.ignored: true
                 }
@@ -676,21 +674,20 @@ HomeForm {
                 Text {
                     id: modernValue
                     anchors.horizontalCenter: modernCard.horizontalCenter
-                    y: 34 * modernTile.zoom
-                    width: Math.max(40, modernCard.width - (writable ? 100 : 20) * modernTile.zoom)
-                    height: 50 * modernTile.zoom
+                    y: 30 * modernTile.zoom
+                    width: Math.max(40, modernCard.width - (writable ? 78 : 12) * modernTile.zoom)
+                    height: 68 * modernTile.zoom
                     text: value
                     color: modernTile.zoned ? window.ui.zoneInk(valueFontColor) : window.ui.textMain
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
-                    font.pointSize: valueFontSize * modernTile.zoom
+                    font.pointSize: (valueFontSize * 1.2) * modernTile.zoom
                     fontSizeMode: Text.Fit
-                    minimumPointSize: 10
+                    minimumPointSize: 18
                     font.bold: true
                     visible: !largeButton
                     Accessible.ignored: true
                 }
-
                 Text {
                     anchors.top: modernValue.bottom
                     anchors.horizontalCenter: modernCard.horizontalCenter
